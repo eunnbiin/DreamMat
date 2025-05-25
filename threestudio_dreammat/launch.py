@@ -3,39 +3,27 @@ import contextlib
 import logging
 import os
 import sys
+import typing # 명시적 임포트
 
 
+# ColoredFilter 클래스 정의 (변경 없음)
 class ColoredFilter(logging.Filter):
-    """
-    A logging filter to add color to certain log levels.
-    """
-
-    RESET = "\\033[0m"
-    RED = "\\033[31m"
-    GREEN = "\\033[32m"
-    YELLOW = "\\033[33m"
-    BLUE = "\\033[34m"
-    MAGENTA = "\\033[35m"
-    CYAN = "\\033[36m"
-
-    COLORS = {
-        "WARNING": YELLOW,
-        "INFO": GREEN,
-        "DEBUG": BLUE,
-        "CRITICAL": MAGENTA,
-        "ERROR": RED,
-    }
-
-    RESET = "\\x1b[0m"
-
+    RESET = "\033[0m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    COLORS = {"WARNING": YELLOW, "INFO": GREEN, "DEBUG": BLUE, "CRITICAL": MAGENTA, "ERROR": RED}
+    RESET_SEQ = "\x1b[0m" # 변수명 변경하여 중복 회피
     def __init__(self):
         super().__init__()
-
     def filter(self, record):
         if record.levelname in self.COLORS:
             color_start = self.COLORS[record.levelname]
             record.levelname = f"{color_start}[{record.levelname}]"
-            record.msg = f"{record.msg}{self.RESET}" 
+            record.msg = f"{record.msg}{self.RESET_SEQ}"
         return True
 
 
@@ -44,7 +32,7 @@ def main(args, extras) -> None:
     # START: Submesh Processing Block 
     # =====================================================================================
     if args.enable_submesh_processing:
-        import subprocess 
+        import subprocess
 
         try:
             from threestudio.utils.mesh_utils import split_mesh_by_segmentation
@@ -57,43 +45,48 @@ def main(args, extras) -> None:
             print("Error: For submesh processing, --original_mesh_path, --segmentation_npy_path, and --target_segment_ids must be provided.")
             sys.exit(1)
 
-        current_script_dir = os.path.dirname(os.path.abspath(__file__)) 
-        project_root = os.path.abspath(os.path.join(current_script_dir, ".."))
+        # 현재 작업 디렉토리 (CWD)가 threestudio_dreammat/ 라고 가정
+        # 사용자가 제공하는 모든 상대 경로는 CWD를 기준으로 해석됨
+        # os.getcwd()는 스크립트가 실행되는 현재 디렉토리를 반환
+        current_working_dir = os.getcwd() 
+        print(f"--- Submesh Processing Enabled (CWD: {current_working_dir}) ---")
 
-        def resolve_path(user_path):
+        def resolve_path_from_cwd(user_path):
             if not user_path: return None
             if os.path.isabs(user_path):
                 return user_path
-            return os.path.normpath(os.path.join(project_root, user_path))
+            # 사용자가 제공한 상대 경로는 현재 작업 디렉토리(threestudio_dreammat/) 기준
+            return os.path.normpath(os.path.join(current_working_dir, user_path))
 
-        original_mesh_abs_path = resolve_path(args.original_mesh_path)
-        segmentation_npy_abs_path = resolve_path(args.segmentation_npy_path)
+        original_mesh_abs_path = resolve_path_from_cwd(args.original_mesh_path)
+        segmentation_npy_abs_path = resolve_path_from_cwd(args.segmentation_npy_path)
         
         if not original_mesh_abs_path or not os.path.exists(original_mesh_abs_path):
-            print(f"Error: Original mesh file not found at resolved path: {original_mesh_abs_path}")
+            print(f"Error: Original mesh file not found at resolved path: {original_mesh_abs_path} (from CWD: {current_working_dir}, input: {args.original_mesh_path})")
             sys.exit(1)
         if not segmentation_npy_abs_path or not os.path.exists(segmentation_npy_abs_path):
-            print(f"Error: Segmentation NPY file not found at resolved path: {segmentation_npy_abs_path}")
+            print(f"Error: Segmentation NPY file not found at resolved path: {segmentation_npy_abs_path} (from CWD: {current_working_dir}, input: {args.segmentation_npy_path})")
             sys.exit(1)
 
         mesh_basename = os.path.splitext(os.path.basename(original_mesh_abs_path))[0]
-        submesh_base_output_abs_dir = resolve_path(args.submesh_output_base_dir)
-        submesh_parts_temp_dir = os.path.join(submesh_base_output_abs_dir, f"{mesh_basename}_parts_files")
-        os.makedirs(submesh_parts_temp_dir, exist_ok=True)
         
-        print(f"--- Submesh Processing Enabled ---")
-        print(f"Project Root: {project_root}")
-        print(f"Original Mesh: {original_mesh_abs_path}")
-        print(f"Segmentation NPY: {segmentation_npy_abs_path}")
+        # 서브메쉬 GLB 파일 및 각 서브프로세스 결과의 기본이 될 디렉토리 (CWD 기준)
+        submesh_run_base_output_dir = resolve_path_from_cwd(args.submesh_output_base_dir)
+        # 실제 서브메쉬 .glb 파일들이 저장될 임시 디렉토리
+        submesh_parts_glb_dir = os.path.join(submesh_run_base_output_dir, f"{mesh_basename}_glb_parts")
+        os.makedirs(submesh_parts_glb_dir, exist_ok=True)
+        
+        print(f"Original Mesh (abs): {original_mesh_abs_path}")
+        print(f"Segmentation NPY (abs): {segmentation_npy_abs_path}")
         print(f"Target IDs: {args.target_segment_ids}")
-        print(f"Submesh .obj save dir: {submesh_parts_temp_dir}")
-        print(f"Subprocess output base: {submesh_base_output_abs_dir}")
+        print(f"Submesh .glb save dir: {submesh_parts_glb_dir}")
+        print(f"Subprocess output base (abs): {submesh_run_base_output_dir}")
 
         target_sm_path, remaining_sm_path = split_mesh_by_segmentation(
             original_mesh_path=original_mesh_abs_path,
             segmentation_npy_path=segmentation_npy_abs_path,
             target_segment_ids=args.target_segment_ids,
-            output_dir=submesh_parts_temp_dir, 
+            output_dir=submesh_parts_glb_dir, 
             base_output_name=mesh_basename
         )
 
@@ -102,13 +95,13 @@ def main(args, extras) -> None:
         if target_sm_path and args.target_prompt:
             sub_processes_to_run.append({
                 "name": f"{mesh_basename}_target_{target_ids_str}",
-                "mesh_path": target_sm_path,
+                "mesh_path": target_sm_path, # mesh_utils가 반환하는 절대 경로
                 "prompt": args.target_prompt,
             })
         if remaining_sm_path and args.remaining_prompt:
             sub_processes_to_run.append({
                 "name": f"{mesh_basename}_remaining_after_{target_ids_str}",
-                "mesh_path": remaining_sm_path, 
+                "mesh_path": remaining_sm_path, # mesh_utils가 반환하는 절대 경로
                 "prompt": args.remaining_prompt,
             })
 
@@ -116,60 +109,61 @@ def main(args, extras) -> None:
             print("No submeshes were created or no prompts provided for them. Exiting submesh processing.")
             sys.exit(0)
 
-        base_subprocess_command_parts = [sys.executable, sys.argv[0]] # ['python', 'launch.py']
+        # sys.argv[0]은 'launch.py' 또는 'threestudio_dreammat/launch.py' 일 수 있음.
+        # subprocess는 CWD에서 launch.py를 실행해야 함.
+        script_to_run = os.path.basename(sys.argv[0]) # 'launch.py'
+        base_subprocess_command_parts = [sys.executable, script_to_run] 
 
-        if args.config:
-            abs_config_path = resolve_path(args.config)
-            if not abs_config_path or not os.path.exists(abs_config_path):
-                print(f"Error: Config file not found at resolved path: {abs_config_path}")
-                sys.exit(1)
-            base_subprocess_command_parts.extend(["--config", abs_config_path])
-        else: 
-            print("Error: --config argument is missing for subprocess construction.")
+        # config 파일 경로도 CWD 기준으로 resolve
+        abs_config_path = resolve_path_from_cwd(args.config)
+        if not abs_config_path or not os.path.exists(abs_config_path):
+            print(f"Error: Config file not found at resolved path: {abs_config_path} (from CWD: {current_working_dir}, input: {args.config})")
             sys.exit(1)
-
+        base_subprocess_command_parts.extend(["--config", abs_config_path])
+        
+        # 나머지 기본 인자들 추가
         if args.train: base_subprocess_command_parts.append("--train")
         elif args.validate: base_subprocess_command_parts.append("--validate")
         elif args.test: base_subprocess_command_parts.append("--test")
         elif args.export: base_subprocess_command_parts.append("--export")
-        
         if args.gpu: base_subprocess_command_parts.extend(["--gpu", args.gpu])
-        if args.gradio: base_subprocess_command_parts.append("--gradio")
-        if args.verbose: base_subprocess_command_parts.append("--verbose")
-        if args.typecheck: base_subprocess_command_parts.append("--typecheck")
+        # --gradio, --verbose, --typecheck는 각 서브프로세스에 개별적으로 필요하다면 추가, 아니면 생략 가능
+        # 여기서는 일단 추가하지 않음 (필요시 각 서브프로세스에 대해 개별 로깅/UI는 복잡해짐)
 
-        original_cli_extras = extras # main(args, extras)에서 받은 extras
+        original_cli_extras = extras 
+
+        # shape_init_params 기본값. YAML 파일에 정의된 것이 있다면 그것이 우선 사용될 수 있음.
+        # 이 값을 CLI 인자로 받거나, 각 메쉬 타입별로 다르게 설정할 수도 있음.
+        default_shape_init_params = args.shape_init_params # 새로운 CLI 인자 사용
 
         for process_info in sub_processes_to_run:
             print(f"\n--- Preparing to run DreamMat for: {process_info['name']} ---")
-            print(f"Mesh: {process_info['mesh_path']}")
+            print(f"Mesh (abs): {process_info['mesh_path']}") # mesh_utils가 반환하는 경로는 절대 경로여야 함
             print(f"Prompt: \"{process_info['prompt']}\"")
 
             current_subprocess_extras = original_cli_extras.copy()
             current_subprocess_extras.extend([
-                f"system.geometry.shape_init=mesh:{process_info['mesh_path']}",
+                f"system.geometry.shape_init=mesh:{process_info['mesh_path']}", # 경로는 절대 경로로 제공
                 f"system.prompt_processor.prompt=\"{process_info['prompt']}\"",
-                "data.blender_generate=true", # Blender pre-render 활성화
+                "data.blender_generate=true",
+                f"system.geometry.shape_init_params={default_shape_init_params}", # CLI 또는 기본값 사용
                 f"name={process_info['name']}", 
-                f"exp_root_dir={submesh_base_output_abs_dir}", 
+                f"exp_root_dir={submesh_run_base_output_dir}", # 각 실행의 출력이 저장될 기본 디렉토리 (절대 경로)
                 "tag=submesh_run" 
             ])
             
             final_cmd_for_subprocess = base_subprocess_command_parts + current_subprocess_extras
             
-            print(f"Executing command: {' '.join(final_cmd_for_subprocess)}")
+            print(f"Executing command (CWD: {current_working_dir}): {' '.join(final_cmd_for_subprocess)}")
             
             try:
-                # 동일한 환경 변수를 사용하며 실행
-                subprocess.run(final_cmd_for_subprocess, check=True, env=os.environ.copy())
+                # subprocess는 현재 launch.py와 동일한 CWD (threestudio_dreammat/)에서 실행됨
+                subprocess.run(final_cmd_for_subprocess, check=True, env=os.environ.copy(), cwd=current_working_dir)
                 print(f"Successfully processed: {process_info['name']}")
             except subprocess.CalledProcessError as e:
                 print(f"Error processing {process_info['name']}: {e}")
-            except FileNotFoundError:
-                print(f"Error: Python executable or launch script not found for command: {' '.join(final_cmd_for_subprocess)}")
             except Exception as e:
                 print(f"An unexpected error occurred while running subprocess for {process_info['name']}: {e}")
-
 
         print("\nAll submesh processing finished.")
         sys.exit(0) # 서브메쉬 처리 완료 후 메인 프로세스 종료
@@ -410,6 +404,10 @@ if __name__ == "__main__":
         type=str,
         default="outputs_submesh_runs", 
         help="Base directory (relative to project root) to save outputs for each submesh process."
+    )
+    parser.add_argument(
+        "--shape_init_params", type=float, default=0.8,
+        help="Value for system.geometry.shape_init_params, used for submesh processing."
     )
     # --- End of new arguments ---
 
